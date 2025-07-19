@@ -6,16 +6,13 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
+import { WebSocket } from 'ws';
 
-const execFileAsync = promisify(execFile);
-
-class BraveControlServer {
+class DiaBrowserControlServer {
   constructor() {
     this.server = new Server(
       {
-        name: 'brave-control',
+        name: 'dia-browser-control',
         version: '0.1.0',
       },
       {
@@ -25,46 +22,108 @@ class BraveControlServer {
       }
     );
 
+    this.cdpPort = 9222;
+    this.cdpBaseUrl = `http://localhost:${this.cdpPort}`;
     this.setupHandlers();
   }
 
-  async executeAppleScript(script) {
+  async executeCDPCommand(method, params = {}, targetId = null) {
     try {
-      const { stdout, stderr } = await execFileAsync('osascript', ['-e', script]);
-      if (stderr) {
-        console.error('AppleScript stderr:', stderr);
+      if (targetId) {
+        // Use WebSocket for commands that require a specific target
+        return await this.executeWebSocketCommand(method, params, targetId);
+      } else {
+        // Use HTTP for simple commands
+        return await this.executeHttpCommand(method, params);
       }
-      return stdout.trim();
     } catch (error) {
-      console.error('AppleScript execution error:', error);
-      
-      // Check for common permission-related errors
-      if (error.message.includes('(-1743)') || 
-          error.message.includes('not allowed assistive access') ||
-          error.message.includes('not authorized') ||
-          error.message.includes('System Events')) {
+      console.error('CDP execution error:', error);
+
+      // Check for Dia Browser not running or CDP not enabled
+      if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
         throw new Error(
-          'Permission denied: Brave control requires automation permissions.\n\n' +
-          'To grant permission:\n' +
-          '1. Open System Settings > Privacy & Security > Automation\n' +
-          '2. Find "Claude" in the list\n' +
-          '3. Enable "Brave Browser" under Claude\n' +
-          '4. You may need to restart Claude after granting permission\n\n' +
-          'Note: You\'ll see a permission prompt the first time you use this extension.'
+          'Dia Browser is not running with remote debugging enabled.\n\n' +
+          'To enable remote debugging:\n' +
+          '1. Close Dia Browser completely\n' +
+          '2. Launch Dia Browser with: /Applications/Dia.app/Contents/MacOS/Dia --remote-debugging-port=9222\n' +
+          '3. Or add --remote-debugging-port=9222 to your Dia Browser startup flags\n\n' +
+          'Note: Remote debugging must be enabled for this extension to work.'
         );
       }
-      
-      // Check for Chrome not running
-      if (error.message.includes('(-600)') || 
-          error.message.includes('application isn\'t running') ||
-          error.message.includes('Brave Browser')) {
-        throw new Error(
-          'Brave Browser is not running. Please launch Brave and try again.'
-        );
-      }
-      
-      throw new Error(`AppleScript error: ${error.message}`);
+
+      throw new Error(`CDP error: ${error.message}`);
     }
+  }
+
+  async executeHttpCommand(endpoint, params = {}, method = 'GET') {
+    const url = new URL(endpoint, this.cdpBaseUrl);
+
+    // Add query parameters if provided
+    Object.keys(params).forEach(key => {
+      url.searchParams.append(key, params[key]);
+    });
+
+    const response = await fetch(url.toString(), {
+      method: method
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const contentType = response.headers.get('content-type');
+    if (contentType && contentType.includes('application/json')) {
+      return await response.json();
+    } else {
+      return await response.text();
+    }
+  }
+
+  async executeWebSocketCommand(method, params = {}, targetId) {
+    return new Promise((resolve, reject) => {
+      const wsUrl = `ws://localhost:${this.cdpPort}/devtools/page/${targetId}`;
+      const ws = new WebSocket(wsUrl);
+      const commandId = Date.now();
+
+      const timeout = setTimeout(() => {
+        ws.close();
+        reject(new Error('WebSocket command timeout'));
+      }, 10000); // 10 second timeout
+
+      ws.on('open', () => {
+        const command = {
+          id: commandId,
+          method: method,
+          params: params
+        };
+        ws.send(JSON.stringify(command));
+      });
+
+      ws.on('message', (data) => {
+        try {
+          const response = JSON.parse(data.toString());
+          if (response.id === commandId) {
+            clearTimeout(timeout);
+            ws.close();
+
+            if (response.error) {
+              reject(new Error(`CDP error: ${response.error.message}`));
+            } else {
+              resolve(response.result);
+            }
+          }
+        } catch (error) {
+          clearTimeout(timeout);
+          ws.close();
+          reject(new Error(`Failed to parse WebSocket response: ${error.message}`));
+        }
+      });
+
+      ws.on('error', (error) => {
+        clearTimeout(timeout);
+        reject(new Error(`WebSocket error: ${error.message}`));
+      });
+    });
   }
 
   setupHandlers() {
@@ -72,7 +131,7 @@ class BraveControlServer {
       tools: [
         {
           name: 'open_url',
-          description: 'Open a URL in Brave',
+          description: 'Open a URL in Dia Browser',
           inputSchema: {
             type: 'object',
             properties: {
@@ -89,7 +148,7 @@ class BraveControlServer {
         },
         {
           name: 'list_tabs',
-          description: 'List all open tabs in Brave',
+          description: 'List all open tabs in Dia Browser',
           inputSchema: {
             type: 'object',
             properties: {
@@ -103,7 +162,7 @@ class BraveControlServer {
           inputSchema: {
             type: 'object',
             properties: {
-              tab_id: { type: 'number', description: 'ID of the tab to close' }
+              tab_id: { type: 'string', description: 'ID of the tab to close' }
             },
             required: ['tab_id']
           }
@@ -114,7 +173,7 @@ class BraveControlServer {
           inputSchema: {
             type: 'object',
             properties: {
-              tab_id: { type: 'number', description: 'ID of the tab to switch to' }
+              tab_id: { type: 'string', description: 'ID of the tab to switch to' }
             },
             required: ['tab_id']
           }
@@ -125,7 +184,7 @@ class BraveControlServer {
           inputSchema: {
             type: 'object',
             properties: {
-              tab_id: { type: 'number', description: 'ID of the tab to reload' }
+              tab_id: { type: 'string', description: 'ID of the tab to reload' }
             }
           }
         },
@@ -135,7 +194,7 @@ class BraveControlServer {
           inputSchema: {
             type: 'object',
             properties: {
-              tab_id: { type: 'number', description: 'ID of the tab' }
+              tab_id: { type: 'string', description: 'ID of the tab' }
             }
           }
         },
@@ -145,7 +204,7 @@ class BraveControlServer {
           inputSchema: {
             type: 'object',
             properties: {
-              tab_id: { type: 'number', description: 'ID of the tab' }
+              tab_id: { type: 'string', description: 'ID of the tab' }
             }
           }
         },
@@ -156,7 +215,7 @@ class BraveControlServer {
             type: 'object',
             properties: {
               code: { type: 'string', description: 'JavaScript code to execute' },
-              tab_id: { type: 'number', description: 'ID of the tab' }
+              tab_id: { type: 'string', description: 'ID of the tab' }
             },
             required: ['code']
           }
@@ -167,7 +226,7 @@ class BraveControlServer {
           inputSchema: {
             type: 'object',
             properties: {
-              tab_id: { type: 'number', description: 'ID of the tab' }
+              tab_id: { type: 'string', description: 'ID of the tab' }
             }
           }
         }
@@ -181,205 +240,215 @@ class BraveControlServer {
         switch (name) {
           case 'open_url': {
             const { url, new_tab = true } = args;
-            const script = new_tab
-              ? `tell application "Brave Browser" to open location "${url}"`
-              : `tell application "Brave Browser" to set URL of active tab of front window to "${url}"`;
-            
-            await this.executeAppleScript(script);
-            return { content: [{ type: 'text', text: `Opened ${url} in Brave` }] };
+
+            if (new_tab) {
+              // Create new tab - Dia Browser requires PUT method
+              const result = await this.executeHttpCommand(`/json/new?${url}`, {}, 'PUT');
+              return { content: [{ type: 'text', text: `Opened ${url} in new tab` }] };
+            } else {
+              // Navigate current tab
+              const tabs = await this.executeHttpCommand('/json');
+              const activeTab = tabs.find(tab => tab.type === 'page');
+
+              if (!activeTab) {
+                throw new Error('No active tab found');
+              }
+
+              await this.executeWebSocketCommand('Page.navigate', { url }, activeTab.id);
+              return { content: [{ type: 'text', text: `Navigated to ${url}` }] };
+            }
           }
 
           case 'get_current_tab': {
-            const script = `
-              tell application "Brave Browser"
-                set currentTab to active tab of front window
-                set tabInfo to {URL of currentTab, title of currentTab, id of currentTab}
-                return tabInfo
-              end tell
-            `;
-            const result = await this.executeAppleScript(script);
-            const [url, title, id] = result.split(', ');
+            const tabs = await this.executeHttpCommand('/json');
+            const activeTab = tabs.find(tab => tab.type === 'page');
+
+            if (!activeTab) {
+              throw new Error('No active tab found');
+            }
+
             return {
               content: [{
                 type: 'text',
-                text: JSON.stringify({ url, title, id: parseInt(id) }, null, 2)
+                text: JSON.stringify({
+                  url: activeTab.url,
+                  title: activeTab.title,
+                  id: activeTab.id
+                }, null, 2)
               }]
             };
           }
 
           case 'list_tabs': {
-            const script = `
-              tell application "Brave Browser"
-                set tabsList to {}
-                repeat with w in windows
-                  repeat with t in tabs of w
-                    set end of tabsList to {id of t as string, URL of t, title of t}
-                  end repeat
-                end repeat
-                set AppleScript's text item delimiters to "|"
-                set output to ""
-                repeat with tabInfo in tabsList
-                  set output to output & (item 1 of tabInfo) & "," & (item 2 of tabInfo) & "," & (item 3 of tabInfo) & "|"
-                end repeat
-                return output
-              end tell
-            `;
-            const result = await this.executeAppleScript(script);
-            const tabs = result.split('|').filter(tab => tab).map(tab => {
-              const [id, url, title] = tab.split(',');
-              return { id: parseInt(id), url, title };
-            });
+            const tabs = await this.executeHttpCommand('/json');
+            const pageTabs = tabs.filter(tab => tab.type === 'page').map(tab => ({
+              id: tab.id,
+              url: tab.url,
+              title: tab.title
+            }));
+
             return {
               content: [{
                 type: 'text',
-                text: JSON.stringify(tabs, null, 2)
+                text: JSON.stringify(pageTabs, null, 2)
               }]
             };
           }
 
           case 'close_tab': {
             const { tab_id } = args;
-            const script = `
-              tell application "Brave Browser"
-                repeat with w in windows
-                  repeat with t in tabs of w
-                    if (id of t as string) is "${tab_id}" then
-                      close t
-                      return "Tab closed"
-                    end if
-                  end repeat
-                end repeat
-                return "Tab not found"
-              end tell
-            `;
-            const result = await this.executeAppleScript(script);
-            return { content: [{ type: 'text', text: result }] };
+
+            try {
+              const result = await this.executeHttpCommand(`/json/close/${tab_id}`);
+              return { content: [{ type: 'text', text: 'Tab closed' }] };
+            } catch (error) {
+              if (error.message.includes('404')) {
+                return { content: [{ type: 'text', text: 'Tab not found' }] };
+              }
+              throw error;
+            }
           }
 
           case 'switch_to_tab': {
             const { tab_id } = args;
-            const script = `
-              tell application "Brave Browser"
-                repeat with w in windows
-                  repeat with tabIndex from 1 to count of tabs of w
-                    set t to tab tabIndex of w
-                    if (id of t as string) is "${tab_id}" then
-                      set active tab index of w to tabIndex
-                      set index of w to 1
-                      activate
-                      return "Switched to tab"
-                    end if
-                  end repeat
-                end repeat
-                return "Tab not found"
-              end tell
-            `;
-            const result = await this.executeAppleScript(script);
-            return { content: [{ type: 'text', text: result }] };
+
+            try {
+              const result = await this.executeHttpCommand(`/json/activate/${tab_id}`);
+              return { content: [{ type: 'text', text: 'Switched to tab' }] };
+            } catch (error) {
+              if (error.message.includes('404')) {
+                return { content: [{ type: 'text', text: 'Tab not found' }] };
+              }
+              throw error;
+            }
           }
 
           case 'reload_tab': {
             const { tab_id } = args;
-            const script = tab_id ? `
-              tell application "Brave Browser"
-                repeat with w in windows
-                  repeat with t in tabs of w
-                    if (id of t as string) is "${tab_id}" then
-                      reload t
-                      return "Tab reloaded"
-                    end if
-                  end repeat
-                end repeat
-                return "Tab not found"
-              end tell
-            ` : `
-              tell application "Brave Browser"
-                reload active tab of front window
-                return "Tab reloaded"
-              end tell
-            `;
-            const result = await this.executeAppleScript(script);
-            return { content: [{ type: 'text', text: result }] };
+
+            let targetId = tab_id;
+            if (!targetId) {
+              // Get current active tab
+              const tabs = await this.executeHttpCommand('/json');
+              const activeTab = tabs.find(tab => tab.type === 'page');
+              if (!activeTab) {
+                throw new Error('No active tab found');
+              }
+              targetId = activeTab.id;
+            }
+
+            try {
+              await this.executeWebSocketCommand('Page.reload', {}, targetId);
+              return { content: [{ type: 'text', text: 'Tab reloaded' }] };
+            } catch (error) {
+              return { content: [{ type: 'text', text: 'Tab not found' }] };
+            }
           }
 
           case 'go_back': {
             const { tab_id } = args;
-            const script = tab_id ? `
-              tell application "Brave Browser"
-                repeat with w in windows
-                  repeat with t in tabs of w
-                    if (id of t as string) is "${tab_id}" then
-                      go back t
-                      return "Navigated back"
-                    end if
-                  end repeat
-                end repeat
-                return "Tab not found"
-              end tell
-            ` : `
-              tell application "Brave Browser"
-                go back active tab of front window
-                return "Navigated back"
-              end tell
-            `;
-            const result = await this.executeAppleScript(script);
-            return { content: [{ type: 'text', text: result }] };
+
+            let targetId = tab_id;
+            if (!targetId) {
+              // Get current active tab
+              const tabs = await this.executeHttpCommand('/json');
+              const activeTab = tabs.find(tab => tab.type === 'page');
+              if (!activeTab) {
+                throw new Error('No active tab found');
+              }
+              targetId = activeTab.id;
+            }
+
+            try {
+              // Get navigation history first
+              const history = await this.executeWebSocketCommand('Page.getNavigationHistory', {}, targetId);
+              if (history.currentIndex > 0) {
+                const entryId = history.entries[history.currentIndex - 1].id;
+                await this.executeWebSocketCommand('Page.navigateToHistoryEntry', { entryId }, targetId);
+                return { content: [{ type: 'text', text: 'Navigated back' }] };
+              } else {
+                return { content: [{ type: 'text', text: 'Cannot go back - at beginning of history' }] };
+              }
+            } catch (error) {
+              return { content: [{ type: 'text', text: 'Tab not found or navigation failed' }] };
+            }
           }
 
           case 'go_forward': {
             const { tab_id } = args;
-            const script = tab_id ? `
-              tell application "Brave Browser"
-                repeat with w in windows
-                  repeat with t in tabs of w
-                    if (id of t as string) is "${tab_id}" then
-                      go forward t
-                      return "Navigated forward"
-                    end if
-                  end repeat
-                end repeat
-                return "Tab not found"
-              end tell
-            ` : `
-              tell application "Brave Browser"
-                go forward active tab of front window
-                return "Navigated forward"
-              end tell
-            `;
-            const result = await this.executeAppleScript(script);
-            return { content: [{ type: 'text', text: result }] };
+
+            let targetId = tab_id;
+            if (!targetId) {
+              // Get current active tab
+              const tabs = await this.executeHttpCommand('/json');
+              const activeTab = tabs.find(tab => tab.type === 'page');
+              if (!activeTab) {
+                throw new Error('No active tab found');
+              }
+              targetId = activeTab.id;
+            }
+
+            try {
+              // Get navigation history first
+              const history = await this.executeWebSocketCommand('Page.getNavigationHistory', {}, targetId);
+              if (history.currentIndex < history.entries.length - 1) {
+                const entryId = history.entries[history.currentIndex + 1].id;
+                await this.executeWebSocketCommand('Page.navigateToHistoryEntry', { entryId }, targetId);
+                return { content: [{ type: 'text', text: 'Navigated forward' }] };
+              } else {
+                return { content: [{ type: 'text', text: 'Cannot go forward - at end of history' }] };
+              }
+            } catch (error) {
+              return { content: [{ type: 'text', text: 'Tab not found or navigation failed' }] };
+            }
           }
 
           case 'execute_javascript': {
             const { code, tab_id } = args;
-            // For AppleScript strings, we need to escape backslashes and double quotes
-            const escapedCode = code
-              .replace(/\\/g, '\\\\')  // Escape backslashes first
-              .replace(/"/g, '\\"');   // Then escape double quotes
-            const script = tab_id ? `
-              tell application "Brave Browser"
-                repeat with w in windows
-                  repeat with t in tabs of w
-                    if (id of t as string) is "${tab_id}" then
-                      set result to execute t javascript "${escapedCode}"
-                      return result
-                    end if
-                  end repeat
-                end repeat
-                return "Tab not found"
-              end tell
-            ` : `
-              tell application "Brave Browser"
-                execute active tab of front window javascript "${escapedCode}"
-              end tell
-            `;
-            const result = await this.executeAppleScript(script);
-            return { content: [{ type: 'text', text: result || 'JavaScript executed' }] };
+
+            let targetId = tab_id;
+            if (!targetId) {
+              // Get current active tab
+              const tabs = await this.executeHttpCommand('/json');
+              const activeTab = tabs.find(tab => tab.type === 'page');
+              if (!activeTab) {
+                throw new Error('No active tab found');
+              }
+              targetId = activeTab.id;
+            }
+
+            try {
+              const result = await this.executeWebSocketCommand('Runtime.evaluate', {
+                expression: code,
+                returnByValue: true,
+                awaitPromise: true
+              }, targetId);
+
+              if (result.exceptionDetails) {
+                return { content: [{ type: 'text', text: `JavaScript error: ${result.exceptionDetails.text}` }] };
+              }
+
+              const value = result.result.value;
+              return { content: [{ type: 'text', text: value !== undefined ? String(value) : 'JavaScript executed' }] };
+            } catch (error) {
+              return { content: [{ type: 'text', text: 'Tab not found or JavaScript execution failed' }] };
+            }
           }
 
           case 'get_page_content': {
             const { tab_id } = args;
-            
+
+            let targetId = tab_id;
+            if (!targetId) {
+              // Get current active tab
+              const tabs = await this.executeHttpCommand('/json');
+              const activeTab = tabs.find(tab => tab.type === 'page');
+              if (!activeTab) {
+                throw new Error('No active tab found');
+              }
+              targetId = activeTab.id;
+            }
+
             // Optimized JavaScript function for extracting page content with preserved links
             const getContentWithLinksScript = `
               function getContentWithLinks() {
@@ -409,26 +478,22 @@ class BraveControlServer {
               }
               getContentWithLinks();
             `;
-            
-            const script = tab_id ? `
-              tell application "Brave Browser"
-                repeat with w in windows
-                  repeat with t in tabs of w
-                    if (id of t as string) is "${tab_id}" then
-                      set pageContent to execute t javascript "${getContentWithLinksScript}"
-                      return pageContent
-                    end if
-                  end repeat
-                end repeat
-                return "Tab not found"
-              end tell
-            ` : `
-              tell application "Brave Browser"
-                execute active tab of front window javascript "${getContentWithLinksScript}"
-              end tell
-            `;
-            const result = await this.executeAppleScript(script);
-            return { content: [{ type: 'text', text: result }] };
+
+            try {
+              const result = await this.executeWebSocketCommand('Runtime.evaluate', {
+                expression: getContentWithLinksScript,
+                returnByValue: true,
+                awaitPromise: true
+              }, targetId);
+
+              if (result.exceptionDetails) {
+                return { content: [{ type: 'text', text: `Error getting page content: ${result.exceptionDetails.text}` }] };
+              }
+
+              return { content: [{ type: 'text', text: result.result.value || 'No content found' }] };
+            } catch (error) {
+              return { content: [{ type: 'text', text: 'Tab not found or failed to get page content' }] };
+            }
           }
 
           default:
@@ -446,9 +511,9 @@ class BraveControlServer {
   async run() {
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
-    console.error('Brave Control MCP server running on stdio');
+    console.error('Dia Browser Control MCP server running on stdio');
   }
 }
 
-const server = new BraveControlServer();
+const server = new DiaBrowserControlServer();
 server.run().catch(console.error);

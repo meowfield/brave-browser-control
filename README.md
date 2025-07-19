@@ -1,6 +1,6 @@
-# Brave Control Extension
+# Dia Browser Control Extension
 
-Control Brave Browser through Claude using AppleScript automation.
+Control Dia Browser through Claude using Chrome DevTools Protocol.
 
 ## Features
 
@@ -12,13 +12,13 @@ Control Brave Browser through Claude using AppleScript automation.
 ## Available Tools
 
 ### `open_url`
-Open a URL in Brave, either in a new tab or current tab.
+Open a URL in Dia Browser, either in a new tab or current tab.
 
 ### `get_current_tab`
 Get information about the currently active tab (URL, title, ID).
 
 ### `list_tabs`
-List all open tabs across all Brave windows.
+List all open tabs across all Dia Browser windows.
 
 ### `close_tab`
 Close a specific tab by its ID.
@@ -40,16 +40,59 @@ Get the text content of a web page.
 
 ## Requirements
 
-- macOS (uses AppleScript)
-- Brave Browser installed
+- macOS (arm64)
+- Dia Browser installed (version 0.38.0 or later)
+- Node.js (version 16.0.0 or later)
 
 ## Installation
 
-To install this extension for Claude Desktop, download and open the `brave-browser-control.dxt` file.
+To install this extension for Claude Desktop, download and open the `dia-browser-control.dxt` file.
+
+## Setup
+
+Before using this extension, you need to enable remote debugging in Dia Browser:
+
+1. **Close Dia Browser completely** if it's running
+2. **Launch Dia Browser with remote debugging enabled**:
+   ```bash
+   /Applications/Dia.app/Contents/MacOS/Dia --remote-debugging-port=9222
+   ```
+3. **Alternative**: Add the flag to your Dia Browser startup configuration
+
+### Easy Startup Script
+
+This repository includes a helper script to launch Dia Browser with the correct settings:
+
+```bash
+# Use the included script
+./launch-dia-debug.sh
+```
+
+Or create your own script:
+
+```bash
+#!/bin/bash
+# Save as ~/bin/dia-debug.sh and make executable
+/Applications/Dia.app/Contents/MacOS/Dia --remote-debugging-port=9222
+```
+
+Then run: `chmod +x ~/bin/dia-debug.sh`
+
+### Testing the Setup
+
+After setting up remote debugging, you can test the connection:
+
+```bash
+# Test CDP connectivity
+node test-cdp.js
+
+# Or manually check the endpoint
+curl http://localhost:9222/json
+```
 
 ## Security
 
-This extension requires access to control Brave Browser through AppleScript. It can:
+This extension requires access to control Dia Browser through Chrome DevTools Protocol. It can:
 - Read and modify web page content
 - Navigate to any URL
 - Execute JavaScript in browser tabs
@@ -58,4 +101,32 @@ This extension requires access to control Brave Browser through AppleScript. It 
 
 **Warning:** This extension provides powerful control over your browser. Only use it with trusted applications and be cautious about the commands you authorize. Since this tool can execute any JavaScript, it can potentially be used to perform malicious actions. Always review the scripts you are about to execute.
 
+**Note:** Remote debugging must be enabled for this extension to work. This opens a debugging port (9222) on localhost, which should only be accessible from your local machine.
+
 Use with appropriate caution and only grant access when necessary.
+
+## Troubleshooting
+
+### Common Issues
+
+1. **"Dia Browser is not running with remote debugging enabled"**
+   - Make sure Dia Browser is launched with `--remote-debugging-port=9222`
+   - Check that no other application is using port 9222
+
+2. **"Tab not found" errors**
+   - The tab may have been closed or navigated away
+   - Try refreshing the tab list with `list_tabs`
+
+3. **JavaScript execution fails**
+   - Check that the tab has finished loading
+   - Verify the JavaScript syntax is correct
+   - Some pages may have Content Security Policy restrictions
+
+### Checking Remote Debugging
+
+You can verify that remote debugging is working by visiting:
+```
+http://localhost:9222/json
+```
+
+This should show a JSON list of all open tabs.

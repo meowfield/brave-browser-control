@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Brave Browser Control extension for Claude Desktop that enables browser automation through AppleScript on macOS. It provides tools for tab management, navigation, page interaction, and JavaScript execution via a Model Context Protocol (MCP) server.
+This is a Dia Browser Control extension for Claude Desktop that enables browser automation through Chrome DevTools Protocol on macOS. It provides tools for tab management, navigation, page interaction, and JavaScript execution via a Model Context Protocol (MCP) server.
 
 ## Development Commands
 
@@ -22,20 +22,22 @@ npx @anthropic-ai/dxt pack
 npx @anthropic-ai/dxt validate manifest.json
 
 # Clean and optimize existing .dxt file
-npx @anthropic-ai/dxt clean brave-browser-control.dxt
+npx @anthropic-ai/dxt clean dia-browser-control.dxt
 ```
 
 ## Architecture
 
-The project implements an MCP server that bridges Claude Desktop with Brave Browser using AppleScript automation.
+The project implements an MCP server that bridges Claude Desktop with Dia Browser using Chrome DevTools Protocol.
 
 ### Key Components
 
 - **server/index.js**: Main MCP server implementation
-  - `BraveControlServer` class handles tool registration and request routing
-  - `executeAppleScript()` method executes AppleScript commands via `osascript`
-  - Comprehensive error handling for permissions and browser state
-  - All 9 browser control tools implemented in the `CallToolRequestSchema` handler
+  - `DiaBrowserControlServer` class handles tool registration and request routing
+  - `executeCDPCommand()` method executes Chrome DevTools Protocol commands
+  - `executeHttpCommand()` for simple HTTP API calls to CDP
+  - `executeWebSocketCommand()` for complex WebSocket-based CDP commands
+  - Comprehensive error handling for browser state and CDP connectivity
+  - All 10 browser control tools implemented in the `CallToolRequestSchema` handler
 
 ### Tool Implementation Patterns
 
@@ -43,35 +45,38 @@ All tools follow consistent patterns in server/index.js:
 
 1. **Tab ID Resolution**: Most tools accept optional `tab_id` parameter
 
-   - If provided: Iterate through all windows/tabs to find matching ID
-   - If omitted: Operate on active tab of front window
+   - If provided: Use the specific tab ID for CDP commands
+   - If omitted: Find active tab via `/json` endpoint and operate on it
 
-2. **AppleScript Execution**:
+2. **CDP Command Execution**:
 
-   - Uses `osascript -e` for AppleScript commands
-   - Proper string escaping for JavaScript code injection
+   - Uses HTTP endpoints for simple operations (list, activate, close tabs)
+   - Uses WebSocket connections for complex operations (JavaScript execution, navigation)
    - Error handling for common issues:
-     - Permission denied (-1743): Automation permissions required
-     - Browser not running (-600): Brave must be launched
+     - Connection refused: Dia Browser not running with remote debugging
+     - 404 errors: Tab not found or invalid tab ID
 
-3. **JavaScript Injection**:
-   - `execute_javascript` tool properly escapes user code
+3. **JavaScript Execution**:
+   - `execute_javascript` tool uses `Runtime.evaluate` CDP method
    - `get_page_content` uses custom DOM traversal to preserve link URLs
    - Format: "link text [URL]" for extracted links
+   - Proper error handling for JavaScript exceptions
 
 ### Security Architecture
 
-- Requires macOS automation permissions for Brave Browser
+- Requires Dia Browser to be launched with remote debugging enabled
+- Opens localhost port 9222 for Chrome DevTools Protocol communication
 - Can execute arbitrary JavaScript in browser context
-- AppleScript strings must be properly escaped to prevent injection
 - Extension validates JavaScript URLs to filter out `javascript:void(0)`
+- WebSocket connections are secured to localhost only
 
 ### Extension Packaging
 
 - **manifest.json**: DXT extension manifest with tool definitions
-- **brave-browser-control.dxt**: Built extension package (zip archive)
-- Platform requirement: macOS only (uses AppleScript)
+- **dia-browser-control.dxt**: Built extension package (zip archive)
+- Platform requirement: macOS (arm64)
 - Runtime requirement: Node.js >= 16.0.0
+- Browser requirement: Dia Browser 0.38.0+ with remote debugging enabled
 
 ## GitHub Actions
 
@@ -83,13 +88,22 @@ The project includes Claude Code GitHub Actions:
 ## Development Notes
 
 - The `.dxt` file should not be committed to version control (added to .gitignore)
-- AppleScript error codes are well-documented in the error handling
+- CDP WebSocket connections have 10-second timeout for commands
 - Link preservation in `get_page_content` uses optimized array joining vs string concatenation
 - All tools return consistent JSON response format via MCP protocol
+- WebSocket library (`ws`) is required for CDP communication
 
 ## Version Management
 
 When updating the extension:
 1. Update version in both `manifest.json` and `package.json`
 2. Follow semantic versioning: `major.minor.patch`
-3. Current version: 0.1.2
+3. Current version: 0.1.0
+
+## Testing
+
+To test the extension:
+1. Launch Dia Browser with remote debugging: `/Applications/Dia.app/Contents/MacOS/Dia --remote-debugging-port=9222`
+2. Verify CDP is working: `curl http://localhost:9222/json`
+3. Run the MCP server: `npm start`
+4. Test individual tools through Claude Desktop

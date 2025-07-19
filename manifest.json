@@ -1,22 +1,26 @@
 {
   "dxt_version": "0.1",
-  "name": "brave-control",
-  "display_name": "Brave Control",
-  "version": "0.1.2",
-  "description": "Control Brave Browser tabs, windows, and navigation",
-  "long_description": "This extension allows Claude to interact with Brave Browser, enabling tab management, navigation, page content reading, and browser automation. It uses Brave's AppleScript API to control the browser programmatically.\n\nThis extension is not affiliated with or endorsed by Brave Software, Inc.",
+  "name": "dia-browser-control",
+  "display_name": "Dia Browser Control",
+  "version": "0.1.0",
+  "description": "Control Dia Browser tabs, windows, and navigation",
+  "long_description": "This extension allows Claude to interact with Dia Browser, enabling tab management, navigation, page content reading, and browser automation. It uses Chrome DevTools Protocol to control the browser programmatically.\n\n**Setup Required:** Before using this extension, you need to enable remote debugging in Dia Browser:\n1. Close Dia Browser completely\n2. Launch with: `/Applications/Dia.app/Contents/MacOS/Dia --remote-debugging-port=9222`\n3. Or use the included script: `./launch-dia-debug.sh`\n\nThis extension is not affiliated with or endorsed by Dia Browser.",
   "author": {
-    "name": "Tariq Alagha",
-    "url": "https://github.com/TariqAlagha/brave-browser-control"
+    "name": "danisgaazov",
+    "url": "https://github.com/danisgaazov/dia-browser-control"
   },
-  "homepage": "https://github.com/TariqAlagha",
-  "documentation": "https://github.com/TariqAlagha/brave-browser-control",
-  "support": "https://github.com/TariqAlagha",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/danisgaazov/dia-browser-control"
+  },
+  "homepage": "https://github.com/danisgaazov/dia-browser-control",
+  "documentation": "https://github.com/danisgaazov/dia-browser-control",
+  "support": "https://github.com/danisgaazov/dia-browser-control/issues",
   "icon": "icon.png",
   "tools": [
     {
       "name": "open_url",
-      "description": "Open a URL in Brave"
+      "description": "Open a URL in Dia Browser"
     },
     {
       "name": "get_current_tab",
@@ -24,7 +28,7 @@
     },
     {
       "name": "list_tabs",
-      "description": "List all open tabs in Brave"
+      "description": "List all open tabs in Dia Browser"
     },
     {
       "name": "close_tab",
@@ -64,7 +68,7 @@
     }
   },
   "keywords": [
-    "brave",
+    "dia",
     "browser",
     "tabs",
     "navigation",
@@ -72,7 +76,9 @@
     "web",
     "javascript",
     "scraping",
-    "macos"
+    "macos",
+    "chrome-devtools-protocol",
+    "cdp"
   ],
   "license": "MIT",
   "compatibility": {
